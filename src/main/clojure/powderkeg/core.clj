@@ -13,6 +13,9 @@
     [clojure.core.reducers :as r]
     [net.cgrand.xforms :as x]))
 
+(def ^:private rdd-evidence
+  (.apply scala.reflect.ClassTag$/MODULE$ org.apache.spark.api.java.JavaRDD))
+
 (defn- all-files
   "Returns a map of relative paths (as Strings) to Files for all files (not directories) below the argument."
   [^java.io.File f]
@@ -396,15 +399,12 @@
 (defn- ensure-scala-pair-rdd [x]
   (-> x (by-key :shuffle nil) .rdd))
 
-(def ^:private evidence
-  (.apply scala.reflect.ClassTag$/MODULE$ org.apache.spark.api.java.JavaRDD))
-
 (defn ^org.apache.spark.api.java.JavaRDD cogroup [rdd & rdds]
   (let [rdd (ensure-scala-pair-rdd rdd)
         rdds (map ensure-scala-pair-rdd rdds)
         partitioner (org.apache.spark.Partitioner/defaultPartitioner
                       rdd (scala-seq rdds))]
-    (by-key (org.apache.spark.rdd.CoGroupedRDD. (scala-seq (cons rdd rdds)) partitioner evidence)
+    (by-key (org.apache.spark.rdd.CoGroupedRDD. (scala-seq (cons rdd rdds)) partitioner rdd-evidence)
       (map (fn [groups]
              (clj/into [] (map #(scala.collection.JavaConversions/seqAsJavaList %)) groups))))))
 
