@@ -8,7 +8,7 @@
                              [org.apache.spark/spark-streaming_2.11 "2.1.0"]]}
              ;; temporary config for plandes
              :appassem {:aot :all}}
-  :dependencies [[org.clojure/clojure "1.7.0"]
+  :dependencies [[org.clojure/clojure "1.8.0"]
                  [net.cgrand/xforms "0.5.1"]
                  [com.esotericsoftware/kryo-shaded "4.0.0"]
                  [com.twitter/carbonite "1.4.0"
