@@ -12,10 +12,10 @@
   [ns+syms]
   (reduce
     (fn [res [ns sym]]
-      (let [v (ns-resolve ns sym)
+      (let [v (get (ns-map ns) sym)
             m (meta v)]
         (cond-> res
-          (not (or (:macro m) (:powderkeg/no-sync m)))
+          (and (var? v) (not (or (:macro m) (:powderkeg/no-sync m))))
           (assoc-in [(symbol (ns-name ns)) sym] [(dissoc m :ns :name) @v]))))
     {}
     ns+syms))
@@ -52,7 +52,7 @@
       nil)))
 
 (defn log-var-change [ns sym]
-  (swap! repl-changes update :vars conj [ns sym]))
+  (when ns (swap! repl-changes update :vars conj [ns sym])))
 
 ;; modify the bytecode of clojure.lang.Var to log var changes
 (defn watch-vars [bytes]
@@ -62,14 +62,14 @@
         (proxy [clojure.asm.ClassVisitor] [clojure.asm.Opcodes/ASM4 cw]
           (visitMethod [access method-name mdesc sig exs]
             (let [mv (.visitMethod cw access method-name mdesc sig exs)]
-              (proxy [clojure.asm.MethodVisitor] [clojure.asm.Opcodes/ASM4 mv]
-                (visitFieldInsn [opcode owner name desc]
-                  ; emit original store
-                  (.visitFieldInsn mv opcode owner name desc)
-                  (when (= [clojure.asm.Opcodes/PUTSTATIC owner name]
-                          [opcode "clojure/lang/Var" "rev"])
-                    (cond 
-                      (= [method-name mdesc] ["<init>" "(Lclojure/lang/Namespace;Lclojure/lang/Symbol;Ljava/lang/Object;)V"])
+              (cond
+                (= [method-name mdesc] ["<init>" "(Lclojure/lang/Namespace;Lclojure/lang/Symbol;Ljava/lang/Object;)V"])
+                (proxy [clojure.asm.MethodVisitor] [clojure.asm.Opcodes/ASM4 mv]
+                  (visitFieldInsn [opcode owner name desc]
+                    ; emit original store
+                    (.visitFieldInsn mv opcode owner name desc)
+                    (when (= [clojure.asm.Opcodes/PUTSTATIC owner name]
+                            [opcode "clojure/lang/Var" "rev"])
                       (doto mv
                         ; get the var
                         (.visitLdcInsn "powderkeg.ouroboros")
@@ -80,35 +80,131 @@
                         (.visitVarInsn clojure.asm.Opcodes/ALOAD 2)                        ; call fn
                         (.visitMethodInsn clojure.asm.Opcodes/INVOKEINTERFACE "clojure/lang/IFn" "invoke" "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")
                         ; discard return value
-                        (.visitInsn clojure.asm.Opcodes/POP))  
-                      (= "<init>" method-name) (throw (ex-info "Unexpected constructor" {:desc mdesc}))
-                      (zero? (bit-and clojure.asm.Opcodes/ACC_STATIC access))
-                      (doto mv
-                        ; get the var
-                        (.visitLdcInsn "powderkeg.ouroboros")
-                        (.visitLdcInsn "log-var-change")
-                        (.visitMethodInsn clojure.asm.Opcodes/INVOKESTATIC "clojure/java/api/Clojure" "var" "(Ljava/lang/Object;Ljava/lang/Object;)Lclojure/lang/IFn;")
-                        ; push args
-                        (.visitVarInsn clojure.asm.Opcodes/ALOAD 0)
-                        (.visitFieldInsn clojure.asm.Opcodes/GETFIELD "clojure/lang/Var" "ns" "Lclojure/lang/Namespace;")
-                        (.visitVarInsn clojure.asm.Opcodes/ALOAD 0)
-                        (.visitFieldInsn clojure.asm.Opcodes/GETFIELD "clojure/lang/Var" "sym" "Lclojure/lang/Symbol;")
-                        ; call fn
-                        (.visitMethodInsn clojure.asm.Opcodes/INVOKEINTERFACE "clojure/lang/IFn" "invoke" "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")
-                        ; discard return value
-                        (.visitInsn clojure.asm.Opcodes/POP))
-                      (= "<clinit>" method-name) nil
-                      :else (throw (ex-info "Unexpected static method" {:name method-name :desc mdesc})))))))))]
+                        (.visitInsn clojure.asm.Opcodes/POP)))))
+                (= [method-name mdesc] ["<init>" "(Lclojure/lang/Namespace;Lclojure/lang/Symbol;)V"])
+                (proxy [clojure.asm.MethodVisitor] [clojure.asm.Opcodes/ASM4 mv]
+                  (visitCode []
+                    (.visitCode mv)
+                    (doto mv
+                      ; get the var
+                      (.visitLdcInsn "powderkeg.ouroboros")
+                      (.visitLdcInsn "log-var-change")
+                      (.visitMethodInsn clojure.asm.Opcodes/INVOKESTATIC "clojure/java/api/Clojure" "var" "(Ljava/lang/Object;Ljava/lang/Object;)Lclojure/lang/IFn;")
+                      ; push args
+                      (.visitVarInsn clojure.asm.Opcodes/ALOAD 1)
+                      (.visitVarInsn clojure.asm.Opcodes/ALOAD 2)                        ; call fn
+                      (.visitMethodInsn clojure.asm.Opcodes/INVOKEINTERFACE "clojure/lang/IFn" "invoke" "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")
+                      ; discard return value
+                      (.visitInsn clojure.asm.Opcodes/POP))))
+                :else
+                (proxy [clojure.asm.MethodVisitor] [clojure.asm.Opcodes/ASM4 mv]
+                  (visitFieldInsn [opcode owner name desc]
+                    ; emit original store
+                    (.visitFieldInsn mv opcode owner name desc)
+                    (when (= [clojure.asm.Opcodes/PUTSTATIC owner name]
+                            [opcode "clojure/lang/Var" "rev"])
+                      (cond
+                        (= "<init>" method-name) (throw (ex-info "Unexpected constructor" {:desc mdesc}))
+                        (zero? (bit-and clojure.asm.Opcodes/ACC_STATIC access))
+                        (doto mv
+                          ; get the var
+                          (.visitLdcInsn "powderkeg.ouroboros")
+                          (.visitLdcInsn "log-var-change")
+                          (.visitMethodInsn clojure.asm.Opcodes/INVOKESTATIC "clojure/java/api/Clojure" "var" "(Ljava/lang/Object;Ljava/lang/Object;)Lclojure/lang/IFn;")
+                          ; push args
+                          (.visitVarInsn clojure.asm.Opcodes/ALOAD 0)
+                          (.visitFieldInsn clojure.asm.Opcodes/GETFIELD "clojure/lang/Var" "ns" "Lclojure/lang/Namespace;")
+                          (.visitVarInsn clojure.asm.Opcodes/ALOAD 0)
+                          (.visitFieldInsn clojure.asm.Opcodes/GETFIELD "clojure/lang/Var" "sym" "Lclojure/lang/Symbol;")
+                          ; call fn
+                          (.visitMethodInsn clojure.asm.Opcodes/INVOKEINTERFACE "clojure/lang/IFn" "invoke" "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")
+                          ; discard return value
+                          (.visitInsn clojure.asm.Opcodes/POP))
+                        (= "<clinit>" method-name) nil
+                        :else (throw (ex-info "Unexpected static method" {:name method-name :desc mdesc}))))))))))]
     (.accept rdr class-visitor 0)
     (.toByteArray cw)))
 
-(def var-transform
+(defmacro ^:private proxy-unique-fns-method-visitor [mv]
+  (let [methods+arglists
+        (into [] (keep #(when (and (.startsWith (.getName %) "visit") (= Void/TYPE (.getReturnType %)))
+                          [(.getName %) (repeatedly (count (.getParameterTypes %)) gensym)]))
+          (.getMethods clojure.asm.MethodVisitor))
+        sm (gensym "sm")]
+    `(let [insns# ~(into #{}
+                     (comp (map first) (filter #(.endsWith % "Insn")) (map keyword))
+                     methods+arglists)
+           mv# ^clojure.asm.MethodVisitor ~mv
+           q# (java.util.ArrayDeque.)
+           meths# ~(into {}
+                     (for [[name arglist] methods+arglists]
+                       [(keyword name)
+                        `(fn [mv# [~@arglist]]
+                           (~(symbol (str \. name)) mv# ~@arglist))]))
+           flush!# (fn flush!#
+                     ([] (flush!# #{}))
+                     ([black-list#]
+                       (when-some [[meth# args#] (.poll q#)]
+                         (when-not (black-list# meth#) ((meths# meth#) mv# args#))
+                         (recur black-list#))))
+           ~sm (fn [meth# args#]
+                 (-> 
+                   (->> q# (map first) (keep insns#) count)
+                   (case
+                     0 (and (= meth# :visitVarInsn)
+                         (let [[op# idx#] args#]
+                           (and (= op# clojure.asm.Opcodes/ALOAD)
+                             (= idx# 7)))) ; brittle
+                     1 (or (not (insns# meth#))
+                         (and (= meth# :visitJumpInsn)
+                          (let [[op# label#] args#]
+                            (= op# clojure.asm.Opcodes/IFNULL))))
+                     2 (or (not (insns# meth#))
+                         (when
+                           (and (= meth# :visitTypeInsn)
+                             (let [[op# type#] args#]
+                               (and (= op# clojure.asm.Opcodes/NEW)
+                                 (= type# "java/lang/StringBuilder"))))
+                           :done))
+                     nil)
+                   (case
+                     (nil false) (do 
+                                   (flush!#)
+                                   ((meths# meth#) mv# args#))
+                     :done (do (flush!# insns#) ((meths# meth#) mv# args#))
+                     true (.add q# [meth# args#]))))]
+       (proxy [clojure.asm.MethodVisitor] [clojure.asm.Opcodes/ASM4 mv#]
+         ~@(for [[name arglist] methods+arglists]
+             `(~(symbol name) [~@arglist]
+                (~sm ~(keyword name) [~@arglist])))))))
+
+(defn unique-fns [bytes]
+  (let [rdr (clojure.asm.ClassReader. bytes)
+        cw (clojure.asm.ClassWriter. 0)
+        class-visitor
+        (proxy [clojure.asm.ClassVisitor] [clojure.asm.Opcodes/ASM4 cw]
+          (visitMethod [access method-name mdesc sig exs]
+            (let [mv (.visitMethod cw access method-name mdesc sig exs)]
+              (if (= method-name "parse")
+                (proxy-unique-fns-method-visitor mv)
+                mv))))]
+    (.accept rdr class-visitor 0)
+    (.toByteArray cw)))
+
+(defn transform-classes-once
+  "Runs a transformation (function from bytes to bytes) on the specified classes once."
+  [instrumentation classes bytes-transform]
   "ClassFileTransfomer which instruments clojure.lang.Var."
-  (reify java.io.Serializable
-    java.lang.instrument.ClassFileTransformer
-    (transform [_ loader classname class domain bytes]
-      (when (= "clojure/lang/Var" classname)
-        (watch-vars bytes)))))
+  (let [classes (set classes)
+        transformer (reify java.io.Serializable
+                      java.lang.instrument.ClassFileTransformer
+                      (transform [_ loader classname class domain bytes]
+                        (when (classes class) (bytes-transform bytes))))]
+    (.addTransformer instrumentation transformer true)
+    (try
+      (.retransformClasses instrumentation (into-array classes))
+      (finally
+        (.removeTransformer instrumentation transformer)))))
 
 (defn ^java.util.jar.Manifest manifest
   "Creates an MANIFEST.MF out of a map"
@@ -175,13 +271,17 @@
   (binding [*out* *err*]
     (println "Counting classes.")
      (let [all-classes (.getAllLoadedClasses powderkeg.Agent/instrumentation)
-           all-dyn-classes (into-array Class (filter #(instance? clojure.lang.DynamicClassLoader (.getClassLoader %)) all-classes))]
+           _ (prn (count all-classes))
+           all-dyn-classes (into-array Class (filter #(instance? clojure.lang.DynamicClassLoader (.getClassLoader ^Class %)) all-classes))]
        (print "Retrieving bytecode of" (count all-dyn-classes) "classes dynamically defined by Clojure (out of" (count all-classes) "classes)... ")
        (.addTransformer powderkeg.Agent/instrumentation no-transform true)
        (.retransformClasses powderkeg.Agent/instrumentation all-dyn-classes)
        (println "done!"))
     
      (print "Instrumenting clojure.lang.Var... ")
-     (.addTransformer powderkeg.Agent/instrumentation var-transform true)
-     (.retransformClasses powderkeg.Agent/instrumentation (into-array [clojure.lang.Var]))
+     (transform-classes-once powderkeg.Agent/instrumentation [clojure.lang.Var] watch-vars)
+     (println "done!")
+     
+     (print "Patching clojure.lang.Compiler... ")
+     (transform-classes-once powderkeg.Agent/instrumentation [clojure.lang.Compiler$FnExpr] unique-fns)
      (println "done!")))

@@ -2,12 +2,24 @@
 
 Live-coding the cluster!
 
+![Circle CI status](https://circleci.com/gh/HCADatalab/powderkeg.svg?style=shield&circle-token=76b1fe0bb820896c15de59ef9c98b263ae98f59e)
+
 ## Usage
 
-First, add Powderkeg and Spark to your dependencies:
+First, add Powderkeg and Spark (1.5 to 2.1 are supported, any scala version) to your dependencies:
+
+E.g. 
 
 ```clj
-:dependencies [[hcadatalab/powderkeg "0.4.1"]
+:dependencies [[hcadatalab/powderkeg "0.5.1"]
+               [com.esotericsoftware/kryo-shaded "4.0.0"]  ;; For Spark 2.x support
+               [org.apache.spark/spark-core_2.11 "2.1.0"]
+               [org.apache.spark/spark-streaming_2.11 "2.1.0"]]
+```
+or
+
+```clj
+:dependencies [[hcadatalab/powderkeg "0.5.1"]
                [org.apache.spark/spark-core_2.10 "1.5.2"]
                [org.apache.spark/spark-streaming_2.10 "1.5.2"]]
 ```
@@ -16,6 +28,7 @@ Then launch a repl (eg `lein repl`):
 
 ```clj
 (require '[powderkeg.core :as keg])
+(require '[net.cgrand.xforms :as x])
 
 (keg/connect! "spark://macbook-pro.home:7077") ; change uri, "local[2]" can do but that's no fun...
 
@@ -198,7 +211,7 @@ Streams (in progress), broadcast helpers, dataframes...
 
 ## License
 
-Copyright © 2015-2016 HCA
+Copyright © 2015-2017 HCA
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
